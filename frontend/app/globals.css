@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+:root {
+  --background: #FBF6F3;
+  --foreground: #3A2E2C;
+  --primary: #D9A8A0;
+  --secondary: #E8D5CE;
+  --border: #EDE0DA;
+  --interactive: #C27B66;
+
+  /* Status Tokens */
+  --status-safe-bg: #8FA382;
+  --status-safe-text: #3A4432;
+  
+  --status-caution-bg: #C9973E;
+  --status-caution-text: #5C4420;
+  
+  --status-risk-bg: #9B4A38;
+  --status-risk-text: #FBF6F3;
+  
+  --status-unknown-bg: #A39285;
+  --status-unknown-text: #3A2E2C;
+}
+
+@theme {
+  --color-background: #FBF6F3;
+  --color-foreground: #3A2E2C;
+  --color-primary: #D9A8A0;
+  --color-primary-hover: #C27B66;
+  --color-secondary: #E8D5CE;
+  --color-border: #EDE0DA;
+  --color-interactive: #C27B66;
+  --color-surface-card: #FFFFFF;
+  --color-surface-dim: #F2E7E2;
+  --color-surface-subtle: #F6ECE7;
+  --color-surface-container: #FEE9E6;
+  
+  --font-display: var(--font-playfair), serif;
+  --font-sans: var(--font-source-sans), sans-serif;
+  
+  --shadow-warm-sm: 0 2px 10px rgba(58, 46, 44, 0.04);
+  --shadow-warm-md: 0 4px 20px rgba(58, 46, 44, 0.06);
+  --shadow-warm-lg: 0 10px 30px rgba(58, 46, 44, 0.08);
+}
+
+html, body {
+  background-color: #FBF6F3;
+  color: #3A2E2C;
+  font-family: var(--font-source-sans), sans-serif;
+  overscroll-behavior: none;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #FBF6F3;
+}
+::-webkit-scrollbar-thumb {
+  background: #E8D5CE;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #C27B66;
+}
+
+/* Paper Grain Overlay Animation */
+.paper-grain-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 999;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+}
