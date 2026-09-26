@@ -2,41 +2,68 @@
 
 import React, { useState } from 'react';
 import { MOCK_WEEKLY_PLAN, CURRENT_USER_PROFILE } from '@/lib/mock-data';
-import { DayPlan, MealPlanCard } from '@/lib/types';
+import { DayPlan, MealPlanCard, WeeklyPlan } from '@/lib/types';
+import { generateMealPlanApi } from '@/lib/api';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
-import { CalendarDays, Clock, Utensils, CheckCircle2, X, ChevronRight, Sparkles, BookOpen } from 'lucide-react';
+import { CalendarDays, Clock, Utensils, CheckCircle2, X, ChevronRight, Sparkles, BookOpen, RefreshCw } from 'lucide-react';
 
 export default function WeeklyPlanPage() {
-  const plan = MOCK_WEEKLY_PLAN;
+  const [weeklyPlan, setWeeklyPlan] = useState<WeeklyPlan>(MOCK_WEEKLY_PLAN);
   const [selectedDayIndex, setSelectedDayIndex] = useState<number>(0);
   const [selectedMeal, setSelectedMeal] = useState<MealPlanCard | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
 
-  const activeDay: DayPlan = plan.days[selectedDayIndex] || plan.days[0];
+  const activeDay: DayPlan = weeklyPlan.days[selectedDayIndex] || weeklyPlan.days[0];
+
+  const handleGeneratePlanWithBackend = async () => {
+    setIsGenerating(true);
+    const backendPlan = await generateMealPlanApi({
+      days: 7,
+      meals_per_day: 3,
+      preferences: ['vegetarian', 'low_oil', 'indian'],
+    });
+    if (backendPlan && backendPlan.days?.length > 0) {
+      setWeeklyPlan(backendPlan);
+    }
+    setIsGenerating(false);
+  };
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-12 space-y-8">
       {/* Header */}
-      <div className="space-y-3">
-        <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-[#E8D5CE]/60 text-[#3A2E2C] text-xs font-bold uppercase tracking-wider">
-          <CalendarDays size={14} className="text-[#C27B66]" />
-          <span>Protocol Schedule &bull; Vol. IV</span>
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+        <div className="space-y-3 max-w-2xl">
+          <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-[#E8D5CE]/60 text-[#3A2E2C] text-xs font-bold uppercase tracking-wider">
+            <CalendarDays size={14} className="text-[#C27B66]" />
+            <span>Protocol Schedule &bull; Vol. IV</span>
+          </div>
+
+          <h1 className="font-display text-3xl sm:text-5xl font-bold text-[#3A2E2C] tracking-tight">
+            Your Weekly <span className="italic font-normal text-[#C27B66]">Table</span>
+          </h1>
+
+          <p className="text-sm sm:text-base text-[#3A2E2C]/80">
+            A balanced cadence of nourishing meals engineered for blood sugar stability (GL &le; 10), zero allergens, and low sodium for{' '}
+            <strong className="font-semibold text-[#3A2E2C]">{CURRENT_USER_PROFILE.name}</strong>.
+          </p>
         </div>
 
-        <h1 className="font-display text-3xl sm:text-5xl font-bold text-[#3A2E2C] tracking-tight">
-          Your Weekly <span className="italic font-normal text-[#C27B66]">Table</span>
-        </h1>
-
-        <p className="text-sm sm:text-base text-[#3A2E2C]/80 max-w-2xl">
-          A balanced cadence of nourishing meals engineered for blood sugar stability (GL &le; 10), zero allergens, and low sodium for{' '}
-          <strong className="font-semibold text-[#3A2E2C]">{CURRENT_USER_PROFILE.name}</strong>.
-        </p>
+        <Button
+          variant="primary"
+          size="md"
+          onClick={handleGeneratePlanWithBackend}
+          disabled={isGenerating}
+          icon={isGenerating ? <RefreshCw size={16} className="animate-spin" /> : <Sparkles size={16} className="text-[#D9A8A0]" />}
+        >
+          {isGenerating ? 'Generating with AI...' : 'Generate Plan with AI'}
+        </Button>
       </div>
 
       {/* Day Tabs */}
       <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
-        {plan.days.map((dayPlan: DayPlan, idx: number) => {
+        {weeklyPlan.days.map((dayPlan: DayPlan, idx: number) => {
           const isActive = selectedDayIndex === idx;
           return (
             <button

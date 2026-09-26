@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from app.core.security import get_current_user_id
 from app.schemas.analysis import AnalysisCreateRequest, AnalysisResponse
 from app.services.analysis_service import analysis_service
+from app.services.llm_service import ImageAnalysisUnavailable
 
 router = APIRouter(tags=["Food Analysis"])
 
@@ -22,6 +23,7 @@ async def analyze_food(
     text_content = None
     context = None
     image_bytes = None
+    image_mime_type = "image/jpeg"
 
     if "multipart/form-data" in content_type:
         form = await request.form()
@@ -36,9 +38,11 @@ async def analyze_food(
 
         file_obj = form.get("image")
         if file_obj and hasattr(file_obj, "read"):
+            if not getattr(file_obj, "content_type", "").startswith("image/"):
+                raise HTTPException(status_code=415, detail="Uploaded file must be an image.")
             image_bytes = await file_obj.read()
-            if not input_type:
-                input_type = "image"
+            image_mime_type = file_obj.content_type
+            input_type = "image"
 
     elif "application/json" in content_type:
         try:
@@ -65,12 +69,16 @@ async def analyze_food(
             detail="Must provide either text description or an image for analysis."
         )
 
-    result = analysis_service.create_analysis(
-        user_id=user_id,
-        input_type=input_type,
-        text=text_content,
-        image_bytes=image_bytes,
-        context=context
-    )
+    try:
+        result = analysis_service.create_analysis(
+            user_id=user_id,
+            input_type=input_type,
+            text=text_content,
+            image_bytes=image_bytes,
+            image_mime_type=image_mime_type,
+            context=context
+        )
+    except ImageAnalysisUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return result

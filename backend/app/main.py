@@ -8,20 +8,21 @@ from app.api.meals import router as meals_router
 from app.api.plans import router as plans_router
 from app.api.profiles import router as profiles_router
 from app.api.restaurants import router as restaurants_router
+from app.api.tracker import router as tracker_router
 from app.api.users import router as users_router
 from app.core.config import settings
 from app.core.database import get_supabase
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("nutrishield.main")
+logger = logger = logging.getLogger("nutrishield.main")
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
     description=(
-        "NutriShield Backend API - Intelligent HealthTech Decision-Support Prototype. "
-        "Integrates Supabase PostgreSQL database and Gemini AI multimodal food understanding."
+        "Swaahara Backend API - Intelligent HealthTech Decision-Support System. "
+        "Integrates Groq AI multimodal food understanding and calorie/nutrient tracking."
     ),
     docs_url="/docs",
     redoc_url="/redoc",
@@ -42,6 +43,7 @@ api_v1_prefix = settings.API_V1_STR
 app.include_router(profiles_router, prefix=api_v1_prefix)
 app.include_router(food_router, prefix=api_v1_prefix)
 app.include_router(analysis_router, prefix=api_v1_prefix)
+app.include_router(tracker_router, prefix=api_v1_prefix)
 app.include_router(restaurants_router, prefix=api_v1_prefix)
 app.include_router(meals_router, prefix=api_v1_prefix)
 app.include_router(plans_router, prefix=api_v1_prefix)

@@ -1,5 +1,7 @@
-import { redirect } from 'next/navigation';
+'use client';
+
+import LandingAuthPage from './landing/page';
 
 export default function RootPage() {
-  redirect('/scan');
+  return <LandingAuthPage />;
 }

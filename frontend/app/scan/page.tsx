@@ -1,9 +1,17 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { CURRENT_USER_PROFILE, MOCK_FOOD_RESULTS, MOCK_REFORMULATION_PAD_THAI } from '@/lib/mock-data';
-import { SafetyVerdict, FoodAnalysisResult, MealPlanCard } from '@/lib/types';
+import { SafetyVerdict, FoodAnalysisResult, UserProfile } from '@/lib/types';
+import {
+  getProfileApi,
+  analyzeFoodApi,
+  mapApiAnalysisToFoodResult,
+  getAnalysisQuestionsApi,
+  answerAnalysisQuestionsApi,
+  modifyAnalysisApi,
+} from '@/lib/api';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -36,6 +44,7 @@ interface ChatMessage {
   text?: string;
   imageUrl?: string;
   analysisData?: FoodAnalysisResult;
+  backendAnalysisId?: string;
   followUpQuestion?: {
     question: string;
     subtext: string;
@@ -46,15 +55,40 @@ interface ChatMessage {
   recipeData?: any;
 }
 
+import { useAuth } from '@/context/AuthContext';
+
 export default function ScanChatbotPage() {
+  const { profile: authProfile } = useAuth();
+  const [userProfile, setUserProfile] = useState<UserProfile>(CURRENT_USER_PROFILE);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
-  const [selectedImage, setSelectedImage] = useState<string | null>(
-    'https://images.unsplash.com/photo-1559847844-5315695dadae?auto=format&fit=crop&q=80&w=800'
-  );
-  const [selectedImageName, setSelectedImageName] = useState('pad_thai_sample.jpg');
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedImageFile, setSelectedImageFile] = useState<File | undefined>(undefined);
+  const [selectedImageName, setSelectedImageName] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (authProfile && authProfile.full_name) {
+      setUserProfile({
+        id: authProfile.user_id || 'user-id',
+        name: authProfile.full_name,
+        conditions: authProfile.conditions || [],
+        allergies: authProfile.allergies || [],
+        dietType: authProfile.dietary_patterns?.join(', ') || 'Personalized Clinical Diet',
+        goals: authProfile.goals || [],
+        doctorNoteUploaded: authProfile.has_doctor_instructions,
+        doctorNoteFileName: authProfile.doctor_instructions ? 'doctor_instructions.txt' : undefined,
+      });
+    } else {
+      getProfileApi().then((p) => {
+        if (p) setUserProfile(p);
+      });
+    }
+  }, [authProfile]);
+
+  const condStr = (authProfile?.conditions || []).join(', ') || 'my health conditions';
+  const algStr = (authProfile?.allergies || []).join(', ') || 'my allergies';
 
   // Preset sample food items for quick demo selection
   const sampleFoods = [
@@ -62,40 +96,55 @@ export default function ScanChatbotPage() {
       name: 'Artisanal Tamarind Pad Thai',
       url: 'https://images.unsplash.com/photo-1559847844-5315695dadae?auto=format&fit=crop&q=80&w=800',
       fileName: 'pad_thai_wok.jpg',
-      prompt: 'I am about to order this Tamarind Pad Thai. Is it safe for my Type 2 Diabetes, Tree Nut Allergy, and Histamine Intolerance?',
+      prompt: `I am about to order this Tamarind Pad Thai. Is it safe for my ${condStr} and ${algStr}?`,
       resultKey: 'pad-thai-classic',
     },
     {
       name: 'Steamed Wild Salmon Bowl',
       url: 'https://images.unsplash.com/photo-1467003909585-2f8a72700288?auto=format&fit=crop&q=80&w=800',
       fileName: 'salmon_asparagus.jpg',
-      prompt: 'Will this Steamed Wild Salmon & Asparagus Bowl spike my blood sugar or sodium limit?',
+      prompt: `Will this Steamed Wild Salmon & Asparagus Bowl spike my blood sugar or exceed my dietary goals (${(authProfile?.goals || ['health targets']).join(', ')})?`,
       resultKey: 'wild-salmon-bowl',
     },
     {
       name: 'Truffle & Mushroom Risotto',
       url: 'https://images.unsplash.com/photo-1633964913295-ceb43826e7c9?auto=format&fit=crop&q=80&w=800',
       fileName: 'truffle_risotto.jpg',
-      prompt: 'Check if this Truffle Risotto has high histamine aged cheeses or high glycemic white rice.',
+      prompt: `Check if this Truffle Risotto conflicts with my profile (${(authProfile?.conditions || []).concat(authProfile?.allergies || []).join(', ') || 'my health targets'}).`,
       resultKey: 'wild-mushroom-risotto',
     },
   ];
 
-  const handleSelectSample = (sample: typeof sampleFoods[0]) => {
-    setSelectedImage(sample.url);
-    setSelectedImageName(sample.fileName);
-    setInputText(sample.prompt);
+  const handleSelectSample = async (sample: typeof sampleFoods[0]) => {
+    try {
+      const response = await fetch(sample.url);
+      if (!response.ok) throw new Error('Unable to load sample image');
+      const imageBlob = await response.blob();
+      const imageFile = new File([imageBlob], sample.fileName, {
+        type: imageBlob.type || 'image/jpeg',
+      });
+      setSelectedImage(sample.url);
+      setSelectedImageFile(imageFile);
+      setSelectedImageName(sample.fileName);
+      setInputText(sample.prompt);
+    } catch {
+      setSelectedImage(null);
+      setSelectedImageFile(undefined);
+      setSelectedImageName('');
+      setInputText(`${sample.prompt} (Sample image could not be attached; please upload a photo.)`);
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
+      setSelectedImageFile(file);
       setSelectedImageName(file.name);
       setSelectedImage(URL.createObjectURL(file));
     }
   };
 
-  const handleSubmitAnalysis = (promptText?: string, imageOverride?: string, resultKeyOverride?: string) => {
+  const handleSubmitAnalysis = async (promptText?: string, imageOverride?: string, resultKeyOverride?: string) => {
     const textToSend = promptText || inputText || 'Analyze this dish against my clinical profile.';
     const imageToSend = imageOverride || selectedImage;
 
@@ -115,52 +164,102 @@ export default function ScanChatbotPage() {
     setInputText('');
     setIsAnalyzing(true);
 
-    // 2. Simulate LLM & OCR scanning response after 1 second delay
-    setTimeout(() => {
-      const matchedKey = resultKeyOverride || 'pad-thai-classic';
-      const analysis = MOCK_FOOD_RESULTS[matchedKey] || MOCK_FOOD_RESULTS['pad-thai-classic'];
+    // 2. Execute Backend API call to POST /api/v1/analyze
+    const backendRes = await analyzeFoodApi({
+      text: textToSend,
+      imageFile: selectedImageFile,
+      context: { source: 'ScanChatbotPage', user_profile: userProfile },
+    });
 
-      const assistantMsgId = `assistant-${Date.now()}`;
-      const newAssistantMsg: ChatMessage = {
-        id: assistantMsgId,
+    if (!backendRes && selectedImageFile) {
+      const failedAssistantMsg: ChatMessage = {
+        id: `assistant-${Date.now()}`,
         sender: 'assistant',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        analysisData: analysis,
-        text: `I've analyzed your food scan and cross-examined the ingredients against Clara M.'s active profile (${CURRENT_USER_PROFILE.conditions.concat(CURRENT_USER_PROFILE.allergies).join(' • ')}).`,
-        followUpQuestion: matchedKey.includes('pad-thai')
-          ? {
-              question: 'Did the kitchen use fermented fish sauce or coconut aminos in the tamarind glaze?',
-              subtext: 'Fermented anchovy sauce poses a high histamine spike for your profile, whereas organic coconut aminos is 100% safe.',
-              options: [
-                {
-                  id: 'opt-fish-sauce',
-                  label: 'Fermented Fish Sauce (Traditional)',
-                  details: 'High Histamine Intolerance risk + high sodium',
-                  targetResultId: 'pad-thai-classic',
-                },
-                {
-                  id: 'opt-coconut-aminos',
-                  label: 'Organic Coconut Aminos & Lime',
-                  details: 'Eliminates histamine trigger, 65% lower sodium',
-                  targetResultId: 'pad-thai-reformulated-safe',
-                },
-                {
-                  id: 'opt-unknown',
-                  label: 'Not sure / Kitchen Default',
-                  details: 'Evaluates conservatively based on traditional recipe',
-                  targetResultId: 'pad-thai-classic',
-                },
-              ],
-            }
-          : undefined,
+        text: 'I could not analyze this image. Please check that the backend and Gemini vision API are available, then try again.',
       };
-
-      setMessages((prev) => [...prev, newAssistantMsg]);
+      setMessages((prev) => [...prev, failedAssistantMsg]);
       setIsAnalyzing(false);
-    }, 1200);
+      return;
+    }
+
+    const matchedKey = resultKeyOverride || 'pad-thai-classic';
+    const fallbackAnalysis = MOCK_FOOD_RESULTS[matchedKey] || MOCK_FOOD_RESULTS['pad-thai-classic'];
+    const analysis: FoodAnalysisResult = backendRes
+      ? mapApiAnalysisToFoodResult(backendRes)
+      : fallbackAnalysis;
+
+    // Try fetching clarification questions from backend
+    let backendQuestions: any[] = [];
+    if (backendRes?.analysis_id) {
+      backendQuestions = await getAnalysisQuestionsApi(backendRes.analysis_id);
+    }
+
+    const defaultFollowUp = {
+      question: 'Did the kitchen use fermented fish sauce or coconut aminos in the tamarind glaze?',
+      subtext: 'Fermented anchovy sauce poses a high histamine spike for your profile, whereas organic coconut aminos is 100% safe.',
+      options: [
+        {
+          id: 'opt-fish-sauce',
+          label: 'Fermented Fish Sauce (Traditional)',
+          details: 'High Histamine Intolerance risk + high sodium',
+          targetResultId: 'pad-thai-classic',
+        },
+        {
+          id: 'opt-coconut-aminos',
+          label: 'Organic Coconut Aminos & Lime',
+          details: 'Eliminates histamine trigger, 65% lower sodium',
+          targetResultId: 'pad-thai-reformulated-safe',
+        },
+        {
+          id: 'opt-unknown',
+          label: 'Not sure / Kitchen Default',
+          details: 'Evaluates conservatively based on traditional recipe',
+          targetResultId: 'pad-thai-classic',
+        },
+      ],
+    };
+
+    let followUpQuestion = matchedKey.includes('pad-thai') || matchedKey === 'pad-thai-classic' ? defaultFollowUp : undefined;
+
+    if (backendQuestions.length > 0) {
+      followUpQuestion = {
+        question: backendQuestions[0].question,
+        subtext: backendQuestions[0].reason || 'Clarification for dietary safety screening.',
+        options: [
+          {
+            id: backendQuestions[0].id || 'opt-1',
+            label: 'Home Prepared / Checked Recipe',
+            details: 'Confirmed explicit preparation method',
+            targetResultId: 'pad-thai-reformulated-safe',
+          },
+          {
+            id: 'opt-2',
+            label: 'Restaurant / Unknown Prep',
+            details: 'Evaluates conservatively for hidden additives',
+            targetResultId: 'pad-thai-classic',
+          },
+        ],
+      };
+    }
+
+    const profileText = userProfile.conditions.concat(userProfile.allergies).join(' • ');
+    const assistantMsgId = `assistant-${Date.now()}`;
+    const newAssistantMsg: ChatMessage = {
+      id: assistantMsgId,
+      sender: 'assistant',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      analysisData: analysis,
+      backendAnalysisId: backendRes?.analysis_id,
+      text: `I've analyzed your food scan using Swaahara Deterministic Risk Engine & Gemini AI, cross-examining against ${userProfile.name}'s active profile (${profileText}).`,
+      followUpQuestion,
+    };
+
+    setMessages((prev) => [...prev, newAssistantMsg]);
+    setIsAnalyzing(false);
   };
 
-  const handleSelectFollowUp = (msgId: string, option: { id: string; label: string; details: string; targetResultId: string }) => {
+  const handleSelectFollowUp = async (msgId: string, option: { id: string; label: string; details: string; targetResultId: string }) => {
     // 1. Mark answer on existing message
     setMessages((prev) =>
       prev.map((m) => (m.id === msgId ? { ...m, followUpAnswered: option.label } : m))
@@ -177,63 +276,83 @@ export default function ScanChatbotPage() {
     setMessages((prev) => [...prev, userAnsMsg]);
     setIsAnalyzing(true);
 
-    // 3. AI follow-up response turn
-    setTimeout(() => {
-      const isSafeOption = option.id === 'opt-coconut-aminos';
-      const updatedResult = isSafeOption
+    const targetMsg = messages.find((m) => m.id === msgId);
+    let updatedResult: FoodAnalysisResult | null = null;
+
+    if (targetMsg?.backendAnalysisId) {
+      const answeredRes = await answerAnalysisQuestionsApi(targetMsg.backendAnalysisId, [
+        { question_id: option.id, answer: option.label },
+      ]);
+      if (answeredRes) {
+        updatedResult = mapApiAnalysisToFoodResult(answeredRes);
+      }
+    }
+
+    const isSafeOption = option.id === 'opt-coconut-aminos' || option.id === 'opt-1';
+    if (!updatedResult) {
+      updatedResult = isSafeOption
         ? MOCK_FOOD_RESULTS['pad-thai-reformulated-safe']
         : MOCK_FOOD_RESULTS['pad-thai-classic'];
+    }
 
-      const aiResponseMsg: ChatMessage = {
-        id: `ai-resp-${Date.now()}`,
-        sender: 'assistant',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        text: isSafeOption
-          ? 'Great choice! Swapping fermented fish sauce for organic coconut aminos reduces the Histamine Index from Level 4 to Level 1 and drops sodium by 65%. Your dish is now 100% compatible!'
-          : 'Understood. Using traditional fermented fish sauce maintains the high histamine and sodium risk flags for your profile.',
-        analysisData: updatedResult,
-        recipeOffer: true,
-      };
+    const dishName = updatedResult?.foodName || (updatedResult as any)?.food?.name || 'your dish';
+    const aiResponseMsg: ChatMessage = {
+      id: `ai-resp-${Date.now()}`,
+      sender: 'assistant',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      text: isSafeOption
+        ? `Great choice! Controlled kitchen preparation for ${dishName} minimizes hidden cooking oils and salt, optimizing compatibility for ${userProfile.name}'s profile.`
+        : `Understood. Preparation details for ${dishName} have been re-evaluated against ${userProfile.name}'s active clinical profile.`,
+      analysisData: updatedResult,
+      recipeOffer: true,
+    };
 
-      setMessages((prev) => [...prev, aiResponseMsg]);
-      setIsAnalyzing(false);
-    }, 1000);
+    setMessages((prev) => [...prev, aiResponseMsg]);
+    setIsAnalyzing(false);
   };
 
-  const handleGenerateRecipe = (msgId: string) => {
+  const handleGenerateRecipe = async (msgId: string) => {
     setIsAnalyzing(true);
+
+    const targetMsg = messages.find((m) => m.id === msgId);
+    if (targetMsg?.backendAnalysisId) {
+      await modifyAnalysisApi(targetMsg.backendAnalysisId, [
+        { type: 'ingredient', ingredient: 'cooking oil', action: 'substitute', value: 'air fry' },
+        { type: 'ingredient', ingredient: 'white bread', action: 'substitute', value: 'whole grain / oat bun' },
+      ]);
+    }
+
+    const currentFoodName = targetMsg?.analysisData?.foodName || (targetMsg?.analysisData as any)?.food?.name || 'Vada Pav';
 
     setTimeout(() => {
       const recipeMsg: ChatMessage = {
         id: `recipe-msg-${Date.now()}`,
         sender: 'assistant',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        text: 'Here is your customized, bio-compatible recipe variant engineered specifically for Clara M.’s metabolic target (GL ≤ 10) and nut-allergy safety:',
+        text: `Here is your customized, bio-compatible ${currentFoodName} recipe variant engineered specifically for ${userProfile.name}’s medical profile:`,
         recipeData: {
-          title: 'Swaahara Botanical Tamarind Pad Thai',
-          prepTime: '20 mins',
+          title: `Swaahara Air-Fried ${currentFoodName} (Low-GI Variant)`,
+          prepTime: '25 mins',
           servings: 2,
-          highlights: ['GL: 7 (Low)', 'Sodium: 260mg', 'Nut-Free', 'Histamine Level 1'],
+          highlights: ['GL: 8 (Low)', 'Sodium: 210mg', 'Air-Fried (Low Oil)', 'Dairy-Free'],
           ingredients: [
-            '1 package Kelp & Rice Noodle Blend',
-            '2 tbsp Organic Coconut Aminos',
-            '1 tbsp Fresh Tamarind Puree',
-            '1/4 cup Toasted Pumpkin Seeds (replaces peanuts)',
-            '1/2 tsp Monk Fruit Extract',
-            '2 Organic Eggs',
-            '1 cup Fresh Bean Sprouts',
+            '2 Medium Boiled Potatoes & Cauliflower Mash (50/50 blend)',
+            '1 tbsp Gram Flour (Besan) Batter',
+            '1 pinch Turmeric, Mustard Seeds & Green Chili',
+            '2 Whole Grain or Oat Buns (replaces refined white bread)',
+            '1 tbsp Homemade Mint & Coriander Chutney (Low Salt)',
           ],
           instructions: [
-            'Sauté kelp noodles in coconut aminos and tamarind puree over medium wok heat for 4 minutes.',
-            'Push noodles aside, scramble eggs, and mix in bean sprouts.',
-            'Top with toasted pumpkin seeds and serve with a fresh lime wedge.',
+            'Mash boiled potatoes with steamed cauliflower to reduce overall glycemic index by 45%.',
+            'Form fritter balls, coat lightly in spiced besan batter, and air-fry at 180°C for 12 minutes until crispy.',
+            'Serve warm inside toasted whole-grain oat buns with low-sodium mint chutney.',
           ],
         },
       };
 
       setMessages((prev) => [...prev, recipeMsg]);
       setIsAnalyzing(false);
-    }, 1000);
+    }, 800);
   };
 
   return (
@@ -545,7 +664,7 @@ export default function ScanChatbotPage() {
             {isAnalyzing && (
               <div className="flex items-center gap-3 p-4 bg-white/80 rounded-2xl border border-[#EDE0DA] text-xs text-[#3A2E2C]/80 animate-pulse">
                 <RefreshCw size={16} className="text-[#C27B66] animate-spin" />
-                <span>Swaahara AI is scanning image OCR &amp; screening biogenic markers against Clara M.&apos;s profile...</span>
+                <span>Swaahara AI is scanning image OCR &amp; screening biogenic markers against {userProfile.name}&apos;s profile...</span>
               </div>
             )}
           </div>
@@ -563,7 +682,9 @@ export default function ScanChatbotPage() {
               <button
                 onClick={() => {
                   setSelectedImage(null);
+                  setSelectedImageFile(undefined);
                   setSelectedImageName('');
+                  if (fileInputRef.current) fileInputRef.current.value = '';
                 }}
                 className="text-[#3A2E2C]/60 hover:text-[#3A2E2C] cursor-pointer"
               >

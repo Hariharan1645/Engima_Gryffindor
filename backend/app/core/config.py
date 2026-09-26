@@ -20,6 +20,9 @@ class Settings:
     # Gemini AI Configuration
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     
+    # Groq AI Configuration
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    
     # CORS Configuration
     CORS_ORIGINS_RAW: str = os.getenv(
         "CORS_ORIGINS", 

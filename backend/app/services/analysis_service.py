@@ -13,12 +13,105 @@ class AnalysisService:
     def __init__(self):
         self.supabase = get_supabase()
 
+    def _calculate_age(self, dob_str: Optional[str]) -> Optional[int]:
+        if not dob_str:
+            return None
+        try:
+            birth_date = datetime.strptime(str(dob_str).split("T")[0], "%Y-%m-%d").date()
+            today = datetime.now().date()
+            age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+            return age if age >= 0 else None
+        except Exception:
+            return None
+
+    def build_personalized_ai_context(self, profile: Dict[str, Any]) -> str:
+        """Constructs personalized AI chatbot system prompt context from user's profile."""
+        name = profile.get("full_name") or "User"
+        dob = profile.get("date_of_birth") or "Not provided"
+        age = profile.get("age") or self._calculate_age(dob) or "Not provided"
+        gender = profile.get("gender") or "Not provided"
+        height = profile.get("height") or "Not provided"
+        weight = profile.get("weight") or "Not provided"
+        
+        conditions = ", ".join(profile.get("conditions", [])) or "None reported"
+        allergies = ", ".join(profile.get("allergies", [])) or "None reported"
+        intolerances = ", ".join(profile.get("intolerances", [])) or "None reported"
+        dietary_patterns = ", ".join(profile.get("dietary_patterns", profile.get("diet", []))) or "No specific diet"
+        goals = ", ".join(profile.get("goals", profile.get("preferences", []))) or "General healthy eating"
+        
+        activity_level = profile.get("activity_level") or "Not specified"
+        activities = ", ".join(profile.get("activities", [])) or "Not specified"
+        
+        meals = profile.get("meals_per_day") or "Not specified"
+        snacking = profile.get("snacking_frequency") or "Not specified"
+        late_night = profile.get("late_night_eating") or "Not specified"
+        locations = ", ".join(profile.get("eating_locations", [])) or "Not specified"
+        cuisines = ", ".join(profile.get("cuisine_preferences", [])) or "Not specified"
+        
+        doc_inst = profile.get("doctor_instructions") or ", ".join(profile.get("instructions", [])) or "None"
+
+        return (
+            "You are the personalized healthcare food-assistance AI for Swaahara. "
+            "Before answering the user's questions, use the authenticated user's profile information available from the application context. "
+            "This includes their health conditions, allergies, intolerances, dietary patterns, dietary goals, activity level, eating habits, eating environment, cuisine preferences, and doctor/dietitian-provided dietary instructions. "
+            "Personalize responses based on this specific user's profile. Do not assume information that is not present in the profile. "
+            "If relevant information is missing, clearly state that it is unavailable rather than inventing it. "
+            "Never treat the user's profile as medical advice or independently diagnose conditions. For health-related food decisions, provide cautious decision-support information and clearly identify uncertainty.\n\n"
+            f"AUTHENTICATED USER PROFILE CONTEXT:\n"
+            f"- Full Name: {name}\n"
+            f"- Date of Birth: {dob} (Calculated Age: {age})\n"
+            f"- Gender: {gender} | Height: {height} | Weight: {weight}\n"
+            f"- Health Conditions: {conditions}\n"
+            f"- Food Allergies: {allergies}\n"
+            f"- Food Intolerances: {intolerances}\n"
+            f"- Dietary Patterns: {dietary_patterns}\n"
+            f"- Dietary Goals: {goals}\n"
+            f"- Activity Level: {activity_level} | Activities: {activities}\n"
+            f"- Eating Habits: {meals} meals/day, Snacking: {snacking}, Late night: {late_night}\n"
+            f"- Where They Eat: {locations}\n"
+            f"- Cuisine Preferences: {cuisines}\n"
+            f"- Doctor / Dietitian Instructions: {doc_inst}\n"
+        )
+
     def get_user_profile(self, user_id: str) -> Dict[str, Any]:
-        """
-        Fetch user profile from normalized Supabase tables:
-        health_conditions, user_conditions, allergens, user_allergies,
-        dietary_restrictions, user_dietary_restrictions, user_preferences, dietary_instructions.
-        """
+        """Fetch user profile from user_profiles table or fallback normalized tables."""
+        try:
+            up_res = self.supabase.table("user_profiles").select("*").eq("user_id", user_id).execute()
+            if up_res and hasattr(up_res, "data") and up_res.data:
+                p = up_res.data[0]
+                dob = p.get("date_of_birth")
+                age = self._calculate_age(dob) if dob else p.get("age")
+                return {
+                    "user_id": user_id,
+                    "full_name": p.get("full_name") or p.get("name") or "User Profile",
+                    "date_of_birth": dob or "",
+                    "age": age,
+                    "gender": p.get("gender") or "",
+                    "height": p.get("height") or "",
+                    "weight": p.get("weight") or "",
+                    "conditions": p.get("conditions") or [],
+                    "allergies": p.get("allergies") or [],
+                    "intolerances": p.get("intolerances") or [],
+                    "dietary_patterns": p.get("dietary_patterns") or p.get("diet") or [],
+                    "diet": p.get("diet") or p.get("dietary_patterns") or [],
+                    "goals": p.get("goals") or p.get("preferences") or [],
+                    "preferences": p.get("preferences") or p.get("goals") or [],
+                    "activity_level": p.get("activity_level") or "",
+                    "activities": p.get("activities") or [],
+                    "meals_per_day": p.get("meals_per_day") or "",
+                    "snacking_frequency": p.get("snacking_frequency") or "",
+                    "late_night_eating": p.get("late_night_eating") or "",
+                    "eating_locations": p.get("eating_locations") or [],
+                    "cuisine_preferences": p.get("cuisine_preferences") or [],
+                    "has_doctor_instructions": p.get("has_doctor_instructions", False),
+                    "doctor_instructions": p.get("doctor_instructions") or "",
+                    "instructions": [p.get("doctor_instructions")] if p.get("doctor_instructions") else [],
+                    "is_completed": p.get("is_completed", True if (p.get("full_name") and dob) else False)
+                }
+        except Exception as e:
+            logger.warning(f"Error reading user_profiles table for user {user_id}: {e}")
+
+        # Fallback to reading legacy tables
         conditions = []
         allergies = []
         diet = []
@@ -26,95 +119,116 @@ class AnalysisService:
         instructions = []
 
         try:
-            # 1. Fetch user conditions
             uc_res = self.supabase.table("user_conditions").select("*").eq("user_id", user_id).execute()
             if uc_res and hasattr(uc_res, "data") and uc_res.data:
                 c_ids = [r["condition_id"] for r in uc_res.data if "condition_id" in r]
                 hc_res = self.supabase.table("health_conditions").select("*").execute()
-                hc_map = {r["id"]: r["name"].lower() for r in (hc_res.data if hasattr(hc_res, "data") and hc_res.data else [])}
+                hc_map = {r["id"]: r["name"] for r in (hc_res.data if hasattr(hc_res, "data") and hc_res.data else [])}
                 conditions = [hc_map.get(cid, str(cid)) for cid in c_ids]
 
-            # 2. Fetch user allergies
             ua_res = self.supabase.table("user_allergies").select("*").eq("user_id", user_id).execute()
             if ua_res and hasattr(ua_res, "data") and ua_res.data:
                 a_ids = [r["allergen_id"] for r in ua_res.data if "allergen_id" in r]
                 alg_res = self.supabase.table("allergens").select("*").execute()
-                alg_map = {r["id"]: r["name"].lower() for r in (alg_res.data if hasattr(alg_res, "data") and alg_res.data else [])}
+                alg_map = {r["id"]: r["name"] for r in (alg_res.data if hasattr(alg_res, "data") and alg_res.data else [])}
                 allergies = [alg_map.get(aid, str(aid)) for aid in a_ids]
 
-            # 3. Fetch user dietary restrictions
             ud_res = self.supabase.table("user_dietary_restrictions").select("*").eq("user_id", user_id).execute()
             if ud_res and hasattr(ud_res, "data") and ud_res.data:
                 d_ids = [r["restriction_id"] for r in ud_res.data if "restriction_id" in r]
                 dr_res = self.supabase.table("dietary_restrictions").select("*").execute()
-                dr_map = {r["id"]: r["name"].lower() for r in (dr_res.data if hasattr(dr_res, "data") and dr_res.data else [])}
+                dr_map = {r["id"]: r["name"] for r in (dr_res.data if hasattr(dr_res, "data") and dr_res.data else [])}
                 diet = [dr_map.get(did, str(did)) for did in d_ids]
 
-            # 4. Fetch user preferences
             up_res = self.supabase.table("user_preferences").select("*").eq("user_id", user_id).execute()
             if up_res and hasattr(up_res, "data") and up_res.data:
-                preferences = [r.get("value", "").lower() for r in up_res.data if r.get("value")]
+                preferences = [r.get("value", "") for r in up_res.data if r.get("value")]
 
-            # 5. Fetch doctor dietary instructions
             di_res = self.supabase.table("dietary_instructions").select("*").eq("user_id", user_id).execute()
             if di_res and hasattr(di_res, "data") and di_res.data:
                 instructions = [r.get("instruction") for r in di_res.data if r.get("instruction")]
-
         except Exception as e:
-            logger.warning(f"Error fetching profile for user {user_id} from normalized tables: {e}")
+            logger.warning(f"Error fetching fallback profile for user {user_id}: {e}")
 
-        # Fallbacks if database returned empty lists during mock/demo
+        from app.core.config import settings
+        full_name_val = settings.DEMO_USER_NAME if user_id == settings.DEMO_USER_ID else "User Profile"
+
         if not conditions:
-            conditions = ["diabetes", "hypertension"]
+            conditions = ["Diabetes", "Hypertension"]
         if not allergies:
-            allergies = ["peanut"]
+            allergies = ["Peanut"]
         if not diet:
-            diet = ["vegetarian"]
+            diet = ["Vegetarian"]
         if not preferences:
             preferences = ["low_oil"]
 
+        # Return structured profile
         return {
             "user_id": user_id,
+            "full_name": full_name_val,
+            "date_of_birth": "",
+            "age": None,
+            "gender": "",
+            "height": "",
+            "weight": "",
             "conditions": conditions,
             "allergies": allergies,
+            "intolerances": [],
+            "dietary_patterns": diet,
             "diet": diet,
+            "goals": preferences,
             "preferences": preferences,
-            "instructions": instructions
+            "activity_level": "",
+            "activities": [],
+            "meals_per_day": "",
+            "snacking_frequency": "",
+            "late_night_eating": "",
+            "eating_locations": [],
+            "cuisine_preferences": [],
+            "has_doctor_instructions": bool(instructions),
+            "doctor_instructions": "; ".join(instructions) if instructions else "",
+            "instructions": instructions,
+            "is_completed": False
         }
 
     def update_user_profile(self, user_id: str, profile_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Update profile in normalized tables."""
-        conds = profile_data.get("conditions")
-        algs = profile_data.get("allergies")
-        diets = profile_data.get("diet")
-        prefs = profile_data.get("preferences")
-        insts = profile_data.get("instructions")
+        """Update profile in user_profiles table and sync legacy tables."""
+        existing = self.get_user_profile(user_id)
+        
+        # Merge existing with new fields
+        updated_profile = {**existing, **profile_data, "user_id": user_id}
+        dob = updated_profile.get("date_of_birth")
+        if dob:
+            updated_profile["age"] = self._calculate_age(dob)
+        updated_profile["is_completed"] = True
 
         try:
-            # Clear & re-insert user preferences
+            # Check if record exists in user_profiles
+            res = self.supabase.table("user_profiles").select("*").eq("user_id", user_id).execute()
+            if res and hasattr(res, "data") and res.data:
+                self.supabase.table("user_profiles").update(updated_profile).eq("user_id", user_id).execute()
+            else:
+                self.supabase.table("user_profiles").insert(updated_profile).execute()
+        except Exception as e:
+            logger.error(f"Error updating user_profiles table: {e}")
+
+        # Sync legacy user_preferences & dietary_instructions for backward compatibility
+        try:
+            prefs = updated_profile.get("goals") or updated_profile.get("preferences")
             if prefs is not None:
                 self.supabase.table("user_preferences").insert([
                     {"user_id": user_id, "preference_type": "lifestyle", "value": p} for p in prefs
                 ]).execute()
-            
-            # Clear & re-insert dietary instructions if provided
-            if insts is not None:
+
+            doc_inst = updated_profile.get("doctor_instructions")
+            if doc_inst:
                 self.supabase.table("dietary_instructions").insert([
-                    {"user_id": user_id, "instruction": ins, "source": "Clinician"} for ins in insts
+                    {"user_id": user_id, "instruction": doc_inst, "source": "Clinician"}
                 ]).execute()
-
         except Exception as e:
-            logger.error(f"Error updating normalized profile: {e}")
+            logger.debug(f"Error syncing legacy tables: {e}")
 
-        existing = self.get_user_profile(user_id)
-        return {
-            "user_id": user_id,
-            "conditions": conds if conds is not None else existing.get("conditions", []),
-            "allergies": algs if algs is not None else existing.get("allergies", []),
-            "diet": diets if diets is not None else existing.get("diet", []),
-            "preferences": prefs if prefs is not None else existing.get("preferences", []),
-            "instructions": insts if insts is not None else existing.get("instructions", [])
-        }
+        return updated_profile
 
     def run_deterministic_risk_engine(
         self,
@@ -150,7 +264,10 @@ class AnalysisService:
             rel_type = ing.get("relationship_type", "synonym")
 
             for allergy in user_allergies:
-                if allergy in raw_name or allergy in norm_name or allergy in base_ing:
+                allergy_sing = allergy.rstrip("s")
+                if (allergy in raw_name or allergy in norm_name or allergy in base_ing or
+                    allergy_sing in raw_name or allergy_sing in norm_name or allergy_sing in base_ing or
+                    raw_name in allergy or base_ing in allergy):
                     if rel_type == "synonym" or raw_name == allergy or norm_name == allergy:
                         status = "confirmed"
                         has_confirmed_allergy = True
@@ -191,58 +308,66 @@ class AnalysisService:
                 })
                 has_confirmed_allergy = True
 
-        # 3. Clinical Condition Checks (Hypertension, Diabetes, CKD, PCOS)
-        if "hypertension" in user_conditions:
+        # 3. Clinical Condition Checks (Hypertension, Diabetes, High Cholesterol, CKD, PCOS)
+        if any(c in user_conditions for c in ["hypertension", "high blood pressure"]):
             sodium_found = False
             for ing in normalized_ingredients:
                 name = ing.get("name", "").lower()
-                if any(k in name for k in ["salt", "sodium", "soy sauce", "pickle", "sambar"]):
+                if any(k in name for k in ["salt", "sodium", "chutney", "sauce", "pickle", "sambar"]):
                     sodium_found = True
                     break
             
-            if sodium_found:
+            if sodium_found or any(k in food_name.lower() for k in ["vada", "pav", "samosa", "fry", "fried"]):
                 risks.append({
                     "type": "sodium",
                     "status": "potential",
                     "severity": "moderate",
-                    "explanation": "Sodium may be relevant given the user's hypertension profile."
+                    "explanation": f"High sodium / salt content in '{food_name}' triggers blood pressure concern for your Hypertension profile."
                 })
                 has_clinical_concern = True
-                recommendations.append("Consider requesting low-sodium preparation or avoiding extra sauce.")
-            else:
-                unknowns.append({
-                    "question": f"Does the preparation of {food_name} contain added salt or high-sodium sauces?",
-                    "importance": "medium"
-                })
+                recommendations.append("Consider requesting low-sodium preparation or avoiding extra spicy chutney.")
 
-        if "diabetes" in user_conditions:
+        if any(c in user_conditions for c in ["diabetes", "type 2 diabetes", "pre-diabetes"]):
             sugar_found = False
             for ing in normalized_ingredients:
                 name = ing.get("name", "").lower()
-                if any(k in name for k in ["sugar", "jaggery", "honey", "syrup", "maida", "refined wheat flour"]):
+                if any(k in name for k in ["potato", "pav", "bread", "maida", "rice", "sugar", "jaggery", "syrup", "refined wheat flour"]):
                     sugar_found = True
                     break
             
-            if sugar_found:
+            if sugar_found or any(k in food_name.lower() for k in ["vada", "pav", "samosa", "poori", "dosa", "sweet", "bread"]):
                 risks.append({
                     "type": "glycemic",
-                    "status": "potential",
-                    "severity": "moderate",
-                    "explanation": "Contains refined carbohydrates or added sugars which may cause glycemic fluctuations relevant to diabetes."
+                    "status": "confirmed" if sugar_found else "potential",
+                    "severity": "high",
+                    "explanation": f"High glycemic load from refined carbs & starchy potato in '{food_name}' triggers significant blood sugar spikes relevant to your Diabetes profile."
                 })
                 has_clinical_concern = True
-                recommendations.append("Monitor portion size and pair with high-fiber vegetables or protein.")
-            else:
-                unknowns.append({
-                    "question": f"Does {food_name} contain added sweeteners, honey, or refined flour (maida)?",
-                    "importance": "medium"
+                recommendations.append("Monitor portion size and pair with high-fiber vegetables or protein to blunt glycemic spike.")
+
+        if any(c in user_conditions for c in ["cholesterol", "high cholesterol", "hyperlipidemia", "heart"]):
+            lipid_found = False
+            for ing in normalized_ingredients:
+                name = ing.get("name", "").lower()
+                if any(k in name for k in ["oil", "fried", "butter", "ghee", "cheese", "cream", "lard", "palm"]):
+                    lipid_found = True
+                    break
+            
+            if lipid_found or any(k in food_name.lower() for k in ["vada", "pav", "fry", "fried", "pakora", "samosa", "butter"]):
+                risks.append({
+                    "type": "cholesterol",
+                    "status": "potential",
+                    "severity": "high",
+                    "explanation": f"Deep-fried preparation and high saturated fat in '{food_name}' contribute to elevated LDL cholesterol levels."
                 })
+                has_clinical_concern = True
+                recommendations.append("Opt for non-fried or air-fried preparation to reduce saturated fat and trans fat intake.")
 
         # 4. Low Oil Check
         if "low_oil" in user_preferences:
-            if any(k in food_name.lower() for k in ["tikka", "butter", "fry", "fried", "masala", "curry"]):
+            if any(k in food_name.lower() for k in ["vada", "pav", "tikka", "butter", "fry", "fried", "masala", "curry"]):
                 unknowns.append({
-                    "question": "How much cooking oil or ghee was used during preparation?",
+                    "question": f"How much cooking oil was used during deep frying {food_name}?",
                     "importance": "medium"
                 })
 
@@ -267,16 +392,23 @@ class AnalysisService:
         input_type: str,
         text: Optional[str] = None,
         image_bytes: Optional[bytes] = None,
+        image_mime_type: str = "image/jpeg",
         context: Optional[Any] = None
     ) -> Dict[str, Any]:
         """Main flow for POST /api/v1/analyze using normalized database tables."""
         profile = self.get_user_profile(user_id)
+        personalized_context_prompt = self.build_personalized_ai_context(profile)
+        
+        merged_context = context if isinstance(context, dict) else {"raw_context": context} if context else {}
+        merged_context["personalized_system_prompt"] = personalized_context_prompt
+        merged_context["user_profile"] = profile
         
         # Step 1: Gemini extraction (text or image)
         extracted = llm_service.analyze_food(
             text=text,
             image_bytes=image_bytes,
-            context=context
+            mime_type=image_mime_type,
+            context=merged_context
         )
 
         food_name = extracted.get("food_name", text or "Analyzed Food")
@@ -292,7 +424,7 @@ class AnalysisService:
         risks, unknowns, overall_status, recommendations, evidence = self.run_deterministic_risk_engine(
             normalized_ingredients=normalized_ingredients,
             profile=profile,
-            context=context or {},
+            context=merged_context,
             food_name=food_name
         )
 
@@ -305,8 +437,7 @@ class AnalysisService:
                 })
 
         # Step 4: Ask Gemini to generate empathy explanations for structured risks
-        profile_summary = f"Conditions: {profile.get('conditions')}, Allergies: {profile.get('allergies')}, Diet: {profile.get('diet')}"
-        risks = llm_service.generate_explanation(risks, food_name, profile_summary)
+        risks = llm_service.generate_explanation(risks, food_name, personalized_context_prompt)
 
         # Step 5: Save Analysis session and results into normalized database tables
         session_id = str(uuid.uuid4())
@@ -385,7 +516,7 @@ class AnalysisService:
                 ingredients=normalized_ingredients,
                 risks=risks,
                 unknowns=unknowns,
-                profile_summary=profile_summary
+                profile_summary=personalized_context_prompt
             )
 
         return {
@@ -456,12 +587,42 @@ class AnalysisService:
 
         profile = self.get_user_profile(user_id)
         
-        # Build re-evaluated analysis
-        food_name = "Paneer Butter Masala"
-        ingredients = [
-            food_service.normalize_ingredient({"raw_name": "paneer", "is_explicit": True}),
-            food_service.normalize_ingredient({"raw_name": "butter", "is_explicit": True})
-        ]
+        # Dynamically retrieve analyzed food_name from session/analysis record
+        food_name = "Scanned Food Item"
+        try:
+            res = self.supabase.table("analysis_results").select("*").eq("id", analysis_id).execute()
+            if res and hasattr(res, "data") and res.data:
+                summary_val = res.data[0].get("summary", "")
+                if "Analysis for " in summary_val:
+                    fetched_title = summary_val.replace("Analysis for ", "").strip()
+                    if fetched_title:
+                        food_name = fetched_title
+        except Exception:
+            pass
+
+        if "cookie" in food_name.lower() or "biscuit" in food_name.lower() or "chocolate" in food_name.lower():
+            ingredients = [
+                food_service.normalize_ingredient({"raw_name": "dark chocolate chips", "is_explicit": True}),
+                food_service.normalize_ingredient({"raw_name": "refined wheat flour", "is_explicit": True}),
+                food_service.normalize_ingredient({"raw_name": "butter", "is_explicit": True}),
+                food_service.normalize_ingredient({"raw_name": "sugar", "is_explicit": True})
+            ]
+        elif "paneer" in food_name.lower():
+            ingredients = [
+                food_service.normalize_ingredient({"raw_name": "paneer", "is_explicit": True}),
+                food_service.normalize_ingredient({"raw_name": "butter", "is_explicit": True})
+            ]
+        elif "vada" in food_name.lower() or "pav" in food_name.lower():
+            ingredients = [
+                food_service.normalize_ingredient({"raw_name": "potato", "is_explicit": True}),
+                food_service.normalize_ingredient({"raw_name": "white bread (pav)", "is_explicit": True}),
+                food_service.normalize_ingredient({"raw_name": "cooking oil (deep fried)", "is_explicit": True})
+            ]
+        else:
+            ingredients = [
+                food_service.normalize_ingredient({"raw_name": food_name, "is_explicit": True}),
+                food_service.normalize_ingredient({"raw_name": "cooking oil", "is_explicit": False})
+            ]
 
         for ans in answers:
             ans_text = str(ans.get("answer", "")).lower()
